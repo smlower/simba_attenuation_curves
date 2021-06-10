@@ -1,10 +1,3 @@
-#;from __future__ import print_function
-#attenuation_curve_gen.py
-
-#generate npz attenuation curves so that we don't have to go through
-#the slow reading in of rtout files but once
-
-
 import numpy as np
 from hyperion.model import ModelOutput
 from astropy.cosmology import Planck13
@@ -13,26 +6,15 @@ from astropy import constants
 import h5py
 from hyperion_input_seds import get_input_seds
 from glob import glob
-
 import sys, os
 
+galaxy_idx = int(sys.argv[1])
+snap_str = '87'
 
+galaxy_num = galaxy_idx #np.load('/orange/narayanan/s.lower/prospector/simba_runs/simba_galaxy_SFRcut.npz')['ID'][int(galaxy_idx)]
 
-#========================================================
-#MODIFIABLE HEADER (make this a function later with argv)
-#z = 0.001
-
-
-galaxy_num = sys.argv[1]
-snap_str = '305'
-
-#composite SED
-sed_directory = '/orange/narayanan/s.lower/simba/pd_runs/snap305/'
-#stellar only SED
-sources_directory = sed_directory
-
-
-output_directory = '/orange/narayanan/s.lower/simba/pd_runs/attenuation_curves/snap305/'
+sed_directory = '/blue/narayanan/desika.narayanan/pd_runs/simba/m25n512/NSF_AAG_2020/snap087/'
+output_directory = '/orange/narayanan/s.lower/simba/galaxy_properties/attenuation_curves/snap087/'
 #========================================================
 
 
@@ -45,27 +27,58 @@ def sed_downsample(source_lam,lum_source,wav_rest):
     source_lam_downsampled = np.zeros(len(wav_rest))
     lum_source_downsampled = np.zeros(len(wav_rest))
     for i in range(len(wav_rest)):
-        idx = find_nearest(source_lam.value,wav_rest[i].value)
-        source_lam_downsampled[i] = source_lam[idx].value
-        lum_source_downsampled[i] = lum_source[idx].value
+        idx = find_nearest(source_lam,wav_rest[i].value)
+        source_lam_downsampled[i] = source_lam[idx]
+        lum_source_downsampled[i] = lum_source[idx]
 
     return source_lam_downsampled,lum_source_downsampled
 
-
-#check if path exists - if not, create it
-#if not os.path.exists(output_directory): os.makedirs(output_directory)
-
-
-sed_file = glob(sed_directory+'/*galaxy'+str(galaxy_num)+'.rtout.sed')[0]
+#sed_file = glob(sed_directory+'/*galaxy'+str(galaxy_num)+'.rtout.sed')[0]
 #print(sed_file)
+#stellar_file = glob(sources_directory+'/*.galaxy'+str(galaxy_num)+'.rtout.sed')[0]
 
-stellar_file = glob(sources_directory+'/*.galaxy'+str(galaxy_num)+'.rtout.sed')[0]
+print('snap305.galaxy'+str(galaxy_num)+'.rtout.sed')
+comp_sed = ModelOutput(sed_directory+'/snap.galaxy'+str(galaxy_num)+'.rtout.sed')
+wav_rest_sed,lum_obs_sed = comp_sed.get_sed(inclination=0,aperture=-1)
+wav_rest_sed =wav_rest_sed[::-1]* u.micron #wav is in micron                                                                                                 
+lum_obs_sed = lum_obs_sed * u.erg/u.s
+
+
+#stellar_data = np.load(sed_directory+'/stellar_seds_galaxy'+str(galaxy_num)+'.npz')
+stellar_data = np.load('/orange/narayanan/s.lower/simba/pd_runs/snap305_mono/snap305/stellar_seds_galaxy'+str(galaxy_num)+'.npz')
+stellar_lam = stellar_data['lam'][::-1]
+stellar_lum = stellar_data['flam'][::-1]
+
+
+dwn = sed_downsample(stellar_lam, stellar_lum, wav_rest_sed)
+
+print('downsampled lam: ',dwn[0])
+print('lum: ',dwn[1])
+print('obs lum: ',lum_obs_sed.to(u.Lsun).value)
+
+extinction = lum_obs_sed.to(u.Lsun).value / (dwn[0] * dwn[1])
+tau = -1.0 * np.log(extinction)
+
+vband_st = find_nearest(stellar_lam, 0.55)
+vband_ob = find_nearest(wav_rest_sed.value, 0.55)
+
+
+print('stellar: ',stellar_lam)
+print('obs: ',wav_rest_sed)
+
+extinction_v = lum_obs_sed[vband_ob].to(u.Lsun).value / (stellar_lum[vband_st] * stellar_lam[vband_st])
+tau_v = -1.0 * np.log(extinction_v)
+
+
+print('tau_v: ',tau_v)
 
 
 
+
+'''
 
 comp_sed = ModelOutput(sed_file)
-wav_rest_sed,dum_lum_obs_sed = comp_sed.get_sed(inclination='all',aperture=-1)
+wav_rest_sed,dum_lum_obs_sed = comp_sed.get_sed(inclination=0,aperture=-1)
 wav_rest_sed =wav_rest_sed* u.micron #wav is in micron 
 nu_rest_sed = constants.c.cgs/wav_rest_sed.cgs
 lum_obs_sed = dum_lum_obs_sed
@@ -74,6 +87,8 @@ nu_rest_sed = constants.c.cgs/(wav_rest_sed.to(u.cm))
 fnu_obs_sed = lum_obs_sed.to(u.Lsun)
 fnu_obs_sed /= nu_rest_sed.to(u.Hz)
 fnu_obs_sed = fnu_obs_sed.to(u.Lsun/u.Hz)
+
+print('size of observed sed: ',np.shape(wav_rest_sed))
 
 #stellar_sed = np.load(stellar_file)
 #nu_rest_stellar = stellar_sed['nu'] #Hz
@@ -97,9 +112,14 @@ source_fnu = source_fnu * u.Lsun/u.Hz
 lum_source = source_fnu * source_nu
 
 
-source_lam_downsampled,lum_source_downsampled = sed_downsample(source_lam.to(u.micron),lum_source.to(u.Lsun),wav_rest_sed.to(u.micron))
-source_lam_downsampled = source_lam_downsampled * u.micron                                                                 
-lum_source_downsampled  = lum_source_downsampled * u.Lsun
+source_lam = source_lam[find_nearest(source_lam, 1.0):find_nearest(source_lam,0.1)+1]
+source_lum = lum_source[find_nearest(source_lam, 1.0):find_nearest(source_lam,0.1)+1]
+#print('shape of stellar sed: ',np.shape(source_lam))
+
+
+#source_lam_downsampled,lum_source_downsampled = sed_downsample(source_lam.to(u.micron),lum_source.to(u.Lsun),wav_rest_sed.to(u.micron))
+#source_lam_downsampled = source_lam_downsampled * u.micron                                                                 
+#lum_source_downsampled  = lum_source_downsampled * u.Lsun
 
 
 
@@ -124,28 +144,27 @@ lum_source_downsampled  = lum_source_downsampled * u.Lsun
 
 #find location of vband in lam array
 vband_idx = find_nearest(wav_rest_sed.to(u.angstrom).value,3000)
-vband_extinction = np.zeros(fnu_obs_sed.shape[0])
-for i in range(fnu_obs_sed.shape[0]): vband_extinction[i] = lum_obs_sed[i,vband_idx].cgs/lum_source_downsampled[vband_idx].cgs
+#vband_extinction = np.zeros(fnu_obs_sed.shape[0])
+vband_extinction = lum_obs_sed[vband_idx].cgs/lum_source[vband_idx].cgs
 
 
 
 
 #calculate extinction values
-extinction = np.zeros([lum_obs_sed.shape[0],len(wav_rest_sed)])
-for i in range(lum_obs_sed.shape[0]):
-    extinction[i,:] = lum_obs_sed[i,:].cgs/lum_source_downsampled[:].cgs
+#extinction = np.zeros([lum_obs_sed.shape[0],len(wav_rest_sed)])
+extinction = lum_obs_sed.cgs/source_lum.cgs'''
 
 
 #tau is calculated by: e^-tau = I/I_0
-tau = -1.*np.log(extinction)
-tau_v = -1.*np.log(vband_extinction)
+#tau = -1.*np.log(extinction)
+#tau_v = -1.*np.log(vband_extinction)
 
 inverse_wavelength = 1./wav_rest_sed.to(u.micron)
 
 
-outfile = output_directory+'attenuation_curve.'+snap_str+'_galaxy'+galaxy_num+'.npz'
+outfile = output_directory+'attenuation_galaxy'+str(galaxy_num)+'_corrected.npz'
 
-np.savez(outfile,wav_rest=wav_rest_sed.value,inverse_wavelength = inverse_wavelength.value,tau=tau,tau_v=tau_v,fnu_obs = fnu_obs_sed.value)
+np.savez(outfile,wav_rest=wav_rest_sed[::-1].value,inverse_wavelength = inverse_wavelength.value,tau=tau,tau_v=tau_v)
 
 
 
